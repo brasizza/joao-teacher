@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Models\Concerns\CleansUpStoredFiles;
+use App\Services\SitePalette;
 use Database\Factories\SiteSettingFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -11,7 +12,7 @@ use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
 /**
- * Single-row table holding every editable text, contact detail and
+ * Single-row table holding every editable text, contact detail, color and
  * scheduling rule of the public site.
  *
  * @property array<int, array{value: string, label: string}>|null $highlights
@@ -22,6 +23,7 @@ use Illuminate\Support\Str;
     'headline',
     'subheadline',
     'photo_path',
+    'primary_color',
     'highlights',
     'about_title',
     'about_text',
@@ -84,6 +86,14 @@ class SiteSetting extends Model
         $name = preg_replace('/^(teacher|prof(essor|essora)?\.?)\s+/iu', '', trim($this->teacher_name)) ?: $this->teacher_name;
 
         return Str::upper(Str::substr($name, 0, 1));
+    }
+
+    /**
+     * Colors of the public site, based on the main color the teacher chose.
+     */
+    public function palette(): SitePalette
+    {
+        return new SitePalette($this->primary_color);
     }
 
     public function hasWhatsApp(): bool

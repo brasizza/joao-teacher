@@ -1,8 +1,11 @@
+@use('App\Services\SitePalette')
+
 @props([
     'title',
     'description' => null,
     'image' => null,
     'monogram' => 'J',
+    'palette' => new SitePalette,
     'indexable' => true,
 ])
 
@@ -11,7 +14,7 @@
     <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
-        <meta name="theme-color" content="#1e2a44">
+        <meta name="theme-color" content="{{ $palette->primaryColor }}">
 
         <title>{{ $title }}</title>
 
@@ -36,11 +39,21 @@
         @endif
         <meta name="twitter:card" content="summary_large_image">
 
-        <link rel="icon" href="data:image/svg+xml,{{ rawurlencode('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#1e2a44"/><text x="32" y="44" font-family="Georgia,serif" font-size="34" text-anchor="middle" fill="#c4a46e">'.e($monogram).'</text></svg>') }}">
+        <link rel="icon" href="data:image/svg+xml,{{ rawurlencode('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="'.$palette->primaryColor.'"/><text x="32" y="44" font-family="Georgia,serif" font-size="34" text-anchor="middle" fill="#c4a46e">'.e($monogram).'</text></svg>') }}">
 
         @fonts
 
         @vite(['resources/css/app.css', 'resources/js/app.js'])
+
+        @if ($palette->isCustomized())
+            <style>
+                :root {
+                    @foreach ($palette->cssVariables() as $property => $value)
+                        {{ $property }}: {{ $value }};
+                    @endforeach
+                }
+            </style>
+        @endif
     </head>
     <body {{ $attributes->merge(['class' => 'min-h-screen']) }}>
         {{ $slot }}

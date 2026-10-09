@@ -45,6 +45,28 @@ class HomeControllerTest extends TestCase
         $this->assertDatabaseCount('site_settings', 1);
     }
 
+    public function test_renders_the_site_in_the_primary_color_chosen_by_the_teacher(): void
+    {
+        SiteSetting::factory()->create(['primary_color' => '#14532d']);
+
+        $response = $this->get(route('home'));
+
+        $response
+            ->assertSee('--color-ink: #14532d;', escape: false)
+            ->assertSee('<meta name="theme-color" content="#14532d">', escape: false);
+    }
+
+    public function test_keeps_the_original_colors_when_no_primary_color_is_chosen(): void
+    {
+        SiteSetting::factory()->create(['primary_color' => null]);
+
+        $response = $this->get(route('home'));
+
+        $response
+            ->assertDontSee('--color-ink', escape: false)
+            ->assertSee('<meta name="theme-color" content="#1e2a44">', escape: false);
+    }
+
     public function test_shows_only_active_methodology_steps_in_their_display_order(): void
     {
         SiteSetting::factory()->create();

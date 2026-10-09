@@ -15,6 +15,7 @@
     :description="$settings->seo_description"
     :image="$settings->photoUrl()"
     :monogram="$settings->monogram()"
+    :palette="$settings->palette()"
 >
     @include('home.header')
 

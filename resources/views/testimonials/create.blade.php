@@ -1,6 +1,7 @@
 <x-layouts.site
     :title="'Deixe seu depoimento — '.$settings->teacher_name"
     :monogram="$settings->monogram()"
+    :palette="$settings->palette()"
     :indexable="false"
 >
     <header class="border-b border-line/70">

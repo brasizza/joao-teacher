@@ -22,6 +22,7 @@ class SiteSettingFactory extends Factory
             'tagline' => 'English Teacher',
             'headline' => fake()->sentence(5),
             'subheadline' => fake()->sentence(12),
+            'primary_color' => null,
             'highlights' => [
                 ['value' => '10+', 'label' => 'anos de experiência'],
                 ['value' => 'C2', 'label' => 'Cambridge Proficiency'],

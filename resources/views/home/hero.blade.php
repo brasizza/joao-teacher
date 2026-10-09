@@ -21,7 +21,7 @@
             @endif
 
             <div class="mt-10 flex flex-wrap items-center gap-x-6 gap-y-3">
-                <a href="#agenda" class="inline-flex items-center gap-3 rounded-full bg-ink px-7 py-4 text-base font-medium text-paper shadow-[0_14px_30px_-14px_rgb(30_42_68/0.8)] transition hover:bg-ink-deep">
+                <a href="#agenda" class="inline-flex items-center gap-3 rounded-full bg-ink px-7 py-4 text-base font-medium text-paper shadow-[0_14px_30px_-14px] shadow-ink/80 transition hover:bg-ink-deep">
                     Agendar aula experimental
                     <span aria-hidden="true">→</span>
                 </a>
@@ -42,11 +42,11 @@
                     <img
                         src="{{ $settings->photoUrl() }}"
                         alt="Foto de {{ $settings->teacher_name }}"
-                        class="relative aspect-[4/5] w-full object-cover shadow-[0_30px_60px_-30px_rgb(20_29_49/0.6)]"
+                        class="relative aspect-[4/5] w-full object-cover shadow-[0_30px_60px_-30px] shadow-ink-deep/60"
                         fetchpriority="high"
                     >
                 @else
-                    <div class="relative grid aspect-[4/5] w-full place-items-center overflow-hidden bg-ink shadow-[0_30px_60px_-30px_rgb(20_29_49/0.6)]">
+                    <div class="relative grid aspect-[4/5] w-full place-items-center overflow-hidden bg-ink shadow-[0_30px_60px_-30px] shadow-ink-deep/60">
                         <span aria-hidden="true" class="font-serif text-[10rem] leading-none text-brass-light/90 italic">{{ $settings->monogram() }}</span>
                         <span aria-hidden="true" class="absolute inset-6 border border-paper/10"></span>
                     </div>

@@ -3,9 +3,11 @@
 namespace App\Filament\Pages;
 
 use App\Models\SiteSetting;
+use App\Services\SitePalette;
 use BackedEnum;
 use Closure;
 use Filament\Actions\Action;
+use Filament\Forms\Components\ColorPicker;
 use Filament\Forms\Components\FileUpload;
 use Filament\Forms\Components\Repeater;
 use Filament\Forms\Components\Textarea;
@@ -18,13 +20,15 @@ use Filament\Schemas\Components\Form;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Components\Tabs;
 use Filament\Schemas\Components\Tabs\Tab;
+use Filament\Schemas\Components\Utilities\Set;
 use Filament\Schemas\Schema;
 use Filament\Support\Icons\Heroicon;
+use Illuminate\Support\Str;
 use UnitEnum;
 
 /**
- * Edits the single SiteSetting row: texts, photo, contacts and the
- * scheduling rules of the public site.
+ * Edits the single SiteSetting row: texts, photo, main color, contacts and
+ * the scheduling rules of the public site.
  *
  * @property-read Schema $form
  */
@@ -60,6 +64,7 @@ class ManageSiteContent extends Page
                     ->persistTabInQueryString()
                     ->tabs([
                         $this->homeTab(),
+                        $this->appearanceTab(),
                         $this->aboutTab(),
                         $this->sectionsTab(),
                         $this->contactTab(),
@@ -150,6 +155,36 @@ class ManageSiteContent extends Page
                     ->maxItems(4)
                     ->defaultItems(0)
                     ->addActionLabel('Adicionar destaque'),
+            ]);
+    }
+
+    private function appearanceTab(): Tab
+    {
+        return Tab::make('Aparência')
+            ->icon(Heroicon::OutlinedSwatch)
+            ->schema([
+                ColorPicker::make('primary_color')
+                    ->label('Cor principal do site')
+                    ->helperText('Aparece nos botões, títulos, na seção de agenda e no rodapé. Prefira tons escuros: os textos claros do site ficam por cima dela. Deixe em branco para usar o azul-marinho original.')
+                    ->placeholder(SitePalette::DefaultPrimaryColor)
+                    ->regex('/^#[0-9a-fA-F]{6}$/')
+                    ->validationMessages([
+                        'regex' => 'Informe a cor no formato #RRGGBB, por exemplo #1e2a44.',
+                    ])
+                    ->rules([
+                        fn (): Closure => function (string $attribute, mixed $value, Closure $fail): void {
+                            if (! (new SitePalette($value))->hasLegibleContrast()) {
+                                $fail('Essa cor é clara demais e deixaria os textos claros do site difíceis de ler. Escolha um tom mais escuro.');
+                            }
+                        },
+                    ])
+                    ->dehydrateStateUsing(fn (?string $state): ?string => filled($state) ? Str::lower($state) : null)
+                    ->hintAction(
+                        Action::make('restoreDefaultPrimaryColor')
+                            ->label('Restaurar cor original')
+                            ->icon(Heroicon::OutlinedArrowUturnLeft)
+                            ->action(fn (Set $set): mixed => $set('primary_color', null)),
+                    ),
             ]);
     }
 
