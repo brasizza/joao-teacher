@@ -60,7 +60,8 @@ class ScheduleBlockResource extends Resource
     {
         return $table
             ->defaultSort('starts_at')
-            ->description('Períodos em que nenhum horário deve aparecer no site, como férias e compromissos.')
+            ->heading('Todos os bloqueios')
+            ->description('Inclui os horários marcados no calendário. Para férias ou um período mais longo, use “Bloquear período”.')
             ->columns([
                 TextColumn::make('starts_at')
                     ->label('Início')

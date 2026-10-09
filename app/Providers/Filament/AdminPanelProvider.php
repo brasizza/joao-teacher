@@ -33,6 +33,7 @@ class AdminPanelProvider extends PanelProvider
             ->profile()
             ->brandName(fn (): string => SiteSetting::current()->teacher_name)
             ->font('Instrument Sans')
+            ->viteTheme('resources/css/filament/admin/theme.css')
             ->colors([
                 'primary' => Color::hex('#1e2a44'),
                 'gray' => Color::Stone,

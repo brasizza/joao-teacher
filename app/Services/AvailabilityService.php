@@ -24,11 +24,35 @@ class AvailabilityService
     public function daysWithSlots(): Collection
     {
         $settings = SiteSetting::current();
-        $intervalMinutes = max(5, $settings->slot_interval_minutes);
+        $intervalMinutes = $this->slotMinutes();
         $earliestStart = CarbonImmutable::now()->addHours($settings->minimum_notice_hours);
         $windowDays = max(1, $settings->booking_window_days);
         $firstDay = CarbonImmutable::today();
         $endOfRange = $firstDay->addDays($windowDays);
+
+        $busyPeriods = $this->busyPeriods($firstDay, $endOfRange, $settings->pending_hold_hours);
+
+        return $this->scheduledDays($firstDay, $windowDays)
+            ->map(fn (array $day): array => [
+                'date' => $day['date'],
+                'slots' => $day['slots']
+                    ->filter(fn (CarbonImmutable $slot): bool => $slot->gte($earliestStart)
+                        && ! $this->overlapsAny($slot, $slot->addMinutes($intervalMinutes), $busyPeriods))
+                    ->values(),
+            ])
+            ->filter(fn (array $day): bool => $day['slots']->isNotEmpty())
+            ->values();
+    }
+
+    /**
+     * Every slot the weekly availability produces on each of the given days,
+     * before removing blocks, requests and the minimum notice.
+     *
+     * @return Collection<int, array{date: CarbonImmutable, slots: Collection<int, CarbonImmutable>}>
+     */
+    public function scheduledDays(CarbonImmutable $firstDay, int $dayCount): Collection
+    {
+        $intervalMinutes = $this->slotMinutes();
 
         $windowsByWeekday = AvailabilityWindow::query()
             ->active()
@@ -36,22 +60,24 @@ class AvailabilityService
             ->toBase()
             ->groupBy(fn (AvailabilityWindow $window): int => $window->weekday->value);
 
-        $busyPeriods = $this->busyPeriods($firstDay, $endOfRange, $settings->pending_hold_hours);
-
-        return collect(range(0, $windowDays - 1))
-            ->map(fn (int $offset): CarbonImmutable => $firstDay->addDays($offset))
+        return collect(range(0, max(1, $dayCount) - 1))
+            ->map(fn (int $offset): CarbonImmutable => $firstDay->startOfDay()->addDays($offset))
             ->map(fn (CarbonImmutable $date): array => [
                 'date' => $date,
                 'slots' => $windowsByWeekday->get($date->dayOfWeek, collect())
                     ->flatMap(fn (AvailabilityWindow $window): array => $this->slotsInWindow($date, $window, $intervalMinutes))
                     ->unique(fn (CarbonImmutable $slot): int => $slot->getTimestamp())
                     ->sortBy(fn (CarbonImmutable $slot): int => $slot->getTimestamp())
-                    ->filter(fn (CarbonImmutable $slot): bool => $slot->gte($earliestStart)
-                        && ! $this->overlapsAny($slot, $slot->addMinutes($intervalMinutes), $busyPeriods))
                     ->values(),
-            ])
-            ->filter(fn (array $day): bool => $day['slots']->isNotEmpty())
-            ->values();
+            ]);
+    }
+
+    /**
+     * Length of each slot, which is also the length of a trial lesson.
+     */
+    public function slotMinutes(): int
+    {
+        return max(5, SiteSetting::current()->slot_interval_minutes);
     }
 
     /**

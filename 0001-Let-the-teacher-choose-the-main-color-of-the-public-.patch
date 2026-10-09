@@ -1,0 +1,738 @@
+From ab3b85b4ca5098b4b863691ef42fae6d4b956189 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 9 Oct 2026 11:49:30 +0000
+Subject: [PATCH] Let the teacher choose the main color of the public site
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The navy blue was hardcoded in app.css. A new "Aparência" tab in the admin
+lets the teacher pick the main color; the site derives a darker shade (hovers,
+footer) and a muted tone of the same hue (body text) in OKLab and overrides
+the Tailwind theme variables. Applied to the original navy, the derivation
+reproduces the hand-picked shades, and without a chosen color the site keeps
+app.css untouched.
+
+Colors whose contrast with the paper background is below 7:1 are rejected,
+so the light texts of the dark sections stay legible. The browser theme
+color, the favicon and the hero shadows now follow the chosen color too.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_014fnDHUZWGmsZ82rdp4J4vd
+---
+ app/Filament/Pages/ManageSiteContent.php      |  39 +++-
+ app/Models/SiteSetting.php                    |  12 +-
+ app/Services/SitePalette.php                  | 187 ++++++++++++++++++
+ database/factories/SiteSettingFactory.php     |   1 +
+ ...d_primary_color_to_site_settings_table.php |  28 +++
+ .../views/components/layouts/site.blade.php   |  17 +-
+ resources/views/home.blade.php                |   1 +
+ resources/views/home/hero.blade.php           |   6 +-
+ resources/views/testimonials/create.blade.php |   1 +
+ .../Filament/Pages/ManageSiteContentTest.php  |  53 +++++
+ .../Http/Controllers/HomeControllerTest.php   |  22 +++
+ .../Controllers/TestimonialControllerTest.php |  28 +++
+ tests/Unit/Services/SitePaletteTest.php       |  89 +++++++++
+ 13 files changed, 476 insertions(+), 8 deletions(-)
+ create mode 100644 app/Services/SitePalette.php
+ create mode 100644 database/migrations/2026_10_09_084323_add_primary_color_to_site_settings_table.php
+ create mode 100644 tests/Feature/Http/Controllers/TestimonialControllerTest.php
+ create mode 100644 tests/Unit/Services/SitePaletteTest.php
+
+diff --git a/app/Filament/Pages/ManageSiteContent.php b/app/Filament/Pages/ManageSiteContent.php
+index 4a962db..12fa71f 100644
+--- a/app/Filament/Pages/ManageSiteContent.php
++++ b/app/Filament/Pages/ManageSiteContent.php
+@@ -3,9 +3,11 @@
+ namespace App\Filament\Pages;
+ 
+ use App\Models\SiteSetting;
++use App\Services\SitePalette;
+ use BackedEnum;
+ use Closure;
+ use Filament\Actions\Action;
++use Filament\Forms\Components\ColorPicker;
+ use Filament\Forms\Components\FileUpload;
+ use Filament\Forms\Components\Repeater;
+ use Filament\Forms\Components\Textarea;
+@@ -18,13 +20,15 @@
+ use Filament\Schemas\Components\Section;
+ use Filament\Schemas\Components\Tabs;
+ use Filament\Schemas\Components\Tabs\Tab;
++use Filament\Schemas\Components\Utilities\Set;
+ use Filament\Schemas\Schema;
+ use Filament\Support\Icons\Heroicon;
++use Illuminate\Support\Str;
+ use UnitEnum;
+ 
+ /**
+- * Edits the single SiteSetting row: texts, photo, contacts and the
+- * scheduling rules of the public site.
++ * Edits the single SiteSetting row: texts, photo, main color, contacts and
++ * the scheduling rules of the public site.
+  *
+  * @property-read Schema $form
+  */
+@@ -60,6 +64,7 @@ public function form(Schema $schema): Schema
+                     ->persistTabInQueryString()
+                     ->tabs([
+                         $this->homeTab(),
++                        $this->appearanceTab(),
+                         $this->aboutTab(),
+                         $this->sectionsTab(),
+                         $this->contactTab(),
+@@ -153,6 +158,36 @@ private function homeTab(): Tab
+             ]);
+     }
+ 
++    private function appearanceTab(): Tab
++    {
++        return Tab::make('Aparência')
++            ->icon(Heroicon::OutlinedSwatch)
++            ->schema([
++                ColorPicker::make('primary_color')
++                    ->label('Cor principal do site')
++                    ->helperText('Aparece nos botões, títulos, na seção de agenda e no rodapé. Prefira tons escuros: os textos claros do site ficam por cima dela. Deixe em branco para usar o azul-marinho original.')
++                    ->placeholder(SitePalette::DefaultPrimaryColor)
++                    ->regex('/^#[0-9a-fA-F]{6}$/')
++                    ->validationMessages([
++                        'regex' => 'Informe a cor no formato #RRGGBB, por exemplo #1e2a44.',
++                    ])
++                    ->rules([
++                        fn (): Closure => function (string $attribute, mixed $value, Closure $fail): void {
++                            if (! (new SitePalette($value))->hasLegibleContrast()) {
++                                $fail('Essa cor é clara demais e deixaria os textos claros do site difíceis de ler. Escolha um tom mais escuro.');
++                            }
++                        },
++                    ])
++                    ->dehydrateStateUsing(fn (?string $state): ?string => filled($state) ? Str::lower($state) : null)
++                    ->hintAction(
++                        Action::make('restoreDefaultPrimaryColor')
++                            ->label('Restaurar cor original')
++                            ->icon(Heroicon::OutlinedArrowUturnLeft)
++                            ->action(fn (Set $set): mixed => $set('primary_color', null)),
++                    ),
++            ]);
++    }
++
+     private function aboutTab(): Tab
+     {
+         return Tab::make('Sobre')
+diff --git a/app/Models/SiteSetting.php b/app/Models/SiteSetting.php
+index f665a00..ba80a89 100644
+--- a/app/Models/SiteSetting.php
++++ b/app/Models/SiteSetting.php
+@@ -3,6 +3,7 @@
+ namespace App\Models;
+ 
+ use App\Models\Concerns\CleansUpStoredFiles;
++use App\Services\SitePalette;
+ use Database\Factories\SiteSettingFactory;
+ use Illuminate\Database\Eloquent\Attributes\Fillable;
+ use Illuminate\Database\Eloquent\Factories\HasFactory;
+@@ -11,7 +12,7 @@
+ use Illuminate\Support\Str;
+ 
+ /**
+- * Single-row table holding every editable text, contact detail and
++ * Single-row table holding every editable text, contact detail, color and
+  * scheduling rule of the public site.
+  *
+  * @property array<int, array{value: string, label: string}>|null $highlights
+@@ -22,6 +23,7 @@
+     'headline',
+     'subheadline',
+     'photo_path',
++    'primary_color',
+     'highlights',
+     'about_title',
+     'about_text',
+@@ -86,6 +88,14 @@ public function monogram(): string
+         return Str::upper(Str::substr($name, 0, 1));
+     }
+ 
++    /**
++     * Colors of the public site, based on the main color the teacher chose.
++     */
++    public function palette(): SitePalette
++    {
++        return new SitePalette($this->primary_color);
++    }
++
+     public function hasWhatsApp(): bool
+     {
+         return filled($this->whatsapp_number);
+diff --git a/app/Services/SitePalette.php b/app/Services/SitePalette.php
+new file mode 100644
+index 0000000..57381d8
+--- /dev/null
++++ b/app/Services/SitePalette.php
+@@ -0,0 +1,187 @@
++<?php
++
++namespace App\Services;
++
++use Illuminate\Support\Str;
++
++/**
++ * Turns the main color chosen by the teacher into the shades the public
++ * site uses in place of the navy blue of resources/css/app.css: the color
++ * itself for buttons, headings and dark sections, a darker shade for hovers
++ * and the footer, and a muted tone of the same hue for body text.
++ *
++ * Shades are derived in the OKLab color space, which keeps the hue of the
++ * chosen color and, applied to the original navy, reproduces the shades the
++ * site was designed with.
++ */
++class SitePalette
++{
++    /**
++     * Navy blue the site was designed with (--color-ink in app.css).
++     */
++    public const string DefaultPrimaryColor = '#1e2a44';
++
++    /**
++     * WCAG contrast ratio the main color must reach against the paper
++     * background. Light text sits on top of it in the dark sections, so this
++     * keeps even their semi-transparent texts above the 4.5:1 minimum.
++     */
++    public const float MinimumContrast = 7.0;
++
++    /**
++     * Background of the site (--color-paper in app.css).
++     */
++    private const string PaperColor = '#f7f4ec';
++
++    /**
++     * How much of the main color is kept when mixing it with black for the
++     * darker shade.
++     */
++    private const float DeepShadeRatio = 0.81;
++
++    private const float SoftToneLightness = 0.445;
++
++    private const float SoftToneChromaRatio = 0.7;
++
++    private const float SoftToneMaximumChroma = 0.04;
++
++    /**
++     * The chosen color as lowercase #rrggbb, or the navy blue when none
++     * (or an invalid one) was chosen.
++     */
++    public readonly string $primaryColor;
++
++    public function __construct(?string $primaryColor = null)
++    {
++        $this->primaryColor = self::normalize($primaryColor) ?? self::DefaultPrimaryColor;
++    }
++
++    public function isCustomized(): bool
++    {
++        return $this->primaryColor !== self::DefaultPrimaryColor;
++    }
++
++    /**
++     * Whether text in the main color stays legible on the paper background,
++     * and light text stays legible on the main color.
++     */
++    public function hasLegibleContrast(): bool
++    {
++        return $this->contrastWithPaper() >= self::MinimumContrast;
++    }
++
++    /**
++     * Custom properties that override the theme colors of app.css.
++     *
++     * @return array{'--color-ink': string, '--color-ink-deep': string, '--color-ink-soft': string}
++     */
++    public function cssVariables(): array
++    {
++        [$lightness, $greenRed, $blueYellow] = self::toOklab($this->primaryColor);
++
++        $chroma = hypot($greenRed, $blueYellow);
++        $softChroma = min($chroma * self::SoftToneChromaRatio, self::SoftToneMaximumChroma);
++        $softChromaScale = $chroma > 0 ? $softChroma / $chroma : 0;
++
++        return [
++            '--color-ink' => $this->primaryColor,
++            '--color-ink-deep' => self::fromOklab(
++                $lightness * self::DeepShadeRatio,
++                $greenRed * self::DeepShadeRatio,
++                $blueYellow * self::DeepShadeRatio,
++            ),
++            '--color-ink-soft' => self::fromOklab(
++                self::SoftToneLightness,
++                $greenRed * $softChromaScale,
++                $blueYellow * $softChromaScale,
++            ),
++        ];
++    }
++
++    private function contrastWithPaper(): float
++    {
++        $lighter = self::relativeLuminance(self::PaperColor);
++        $darker = self::relativeLuminance($this->primaryColor);
++
++        if ($darker > $lighter) {
++            [$lighter, $darker] = [$darker, $lighter];
++        }
++
++        return ($lighter + 0.05) / ($darker + 0.05);
++    }
++
++    private static function normalize(?string $color): ?string
++    {
++        $color = Str::lower(trim((string) $color));
++
++        return preg_match('/^#[0-9a-f]{6}$/', $color) ? $color : null;
++    }
++
++    /**
++     * @return array{float, float, float}
++     */
++    private static function toLinearRgb(string $color): array
++    {
++        return array_map(
++            fn (string $channel): float => self::toLinearChannel(hexdec($channel) / 255),
++            str_split(ltrim($color, '#'), 2),
++        );
++    }
++
++    private static function toLinearChannel(float $channel): float
++    {
++        return $channel <= 0.04045 ? $channel / 12.92 : (($channel + 0.055) / 1.055) ** 2.4;
++    }
++
++    private static function toGammaChannel(float $channel): float
++    {
++        $channel = max(0.0, min(1.0, $channel));
++
++        return $channel <= 0.0031308 ? $channel * 12.92 : 1.055 * $channel ** (1 / 2.4) - 0.055;
++    }
++
++    private static function relativeLuminance(string $color): float
++    {
++        [$red, $green, $blue] = self::toLinearRgb($color);
++
++        return 0.2126 * $red + 0.7152 * $green + 0.0722 * $blue;
++    }
++
++    /**
++     * Conversion published by Björn Ottosson, the author of OKLab.
++     *
++     * @return array{float, float, float}
++     */
++    private static function toOklab(string $color): array
++    {
++        [$red, $green, $blue] = self::toLinearRgb($color);
++
++        $long = (0.4122214708 * $red + 0.5363325363 * $green + 0.0514459929 * $blue) ** (1 / 3);
++        $medium = (0.2119034982 * $red + 0.6806995451 * $green + 0.1073969566 * $blue) ** (1 / 3);
++        $short = (0.0883024619 * $red + 0.2817188376 * $green + 0.6299787005 * $blue) ** (1 / 3);
++
++        return [
++            0.2104542553 * $long + 0.7936177850 * $medium - 0.0040720468 * $short,
++            1.9779984951 * $long - 2.4285922050 * $medium + 0.4505937099 * $short,
++            0.0259040371 * $long + 0.7827717662 * $medium - 0.8086757660 * $short,
++        ];
++    }
++
++    private static function fromOklab(float $lightness, float $greenRed, float $blueYellow): string
++    {
++        $long = ($lightness + 0.3963377774 * $greenRed + 0.2158037573 * $blueYellow) ** 3;
++        $medium = ($lightness - 0.1055613458 * $greenRed - 0.0638541728 * $blueYellow) ** 3;
++        $short = ($lightness - 0.0894841775 * $greenRed - 1.2914855480 * $blueYellow) ** 3;
++
++        $channels = [
++            4.0767416621 * $long - 3.3077115913 * $medium + 0.2309699292 * $short,
++            -1.2684380046 * $long + 2.6097574011 * $medium - 0.3413193965 * $short,
++            -0.0041960863 * $long - 0.7034186147 * $medium + 1.7076147010 * $short,
++        ];
++
++        return '#'.implode('', array_map(
++            fn (float $channel): string => sprintf('%02x', (int) round(self::toGammaChannel($channel) * 255)),
++            $channels,
++        ));
++    }
++}
+diff --git a/database/factories/SiteSettingFactory.php b/database/factories/SiteSettingFactory.php
+index 8e6fd05..cf1c050 100644
+--- a/database/factories/SiteSettingFactory.php
++++ b/database/factories/SiteSettingFactory.php
+@@ -22,6 +22,7 @@ public function definition(): array
+             'tagline' => 'English Teacher',
+             'headline' => fake()->sentence(5),
+             'subheadline' => fake()->sentence(12),
++            'primary_color' => null,
+             'highlights' => [
+                 ['value' => '10+', 'label' => 'anos de experiência'],
+                 ['value' => 'C2', 'label' => 'Cambridge Proficiency'],
+diff --git a/database/migrations/2026_10_09_084323_add_primary_color_to_site_settings_table.php b/database/migrations/2026_10_09_084323_add_primary_color_to_site_settings_table.php
+new file mode 100644
+index 0000000..a4ac791
+--- /dev/null
++++ b/database/migrations/2026_10_09_084323_add_primary_color_to_site_settings_table.php
+@@ -0,0 +1,28 @@
++<?php
++
++use Illuminate\Database\Migrations\Migration;
++use Illuminate\Database\Schema\Blueprint;
++use Illuminate\Support\Facades\Schema;
++
++return new class extends Migration
++{
++    /**
++     * Run the migrations.
++     */
++    public function up(): void
++    {
++        Schema::table('site_settings', function (Blueprint $table) {
++            $table->string('primary_color', 7)->nullable()->after('photo_path');
++        });
++    }
++
++    /**
++     * Reverse the migrations.
++     */
++    public function down(): void
++    {
++        Schema::table('site_settings', function (Blueprint $table) {
++            $table->dropColumn('primary_color');
++        });
++    }
++};
+diff --git a/resources/views/components/layouts/site.blade.php b/resources/views/components/layouts/site.blade.php
+index 9679c68..841a94c 100644
+--- a/resources/views/components/layouts/site.blade.php
++++ b/resources/views/components/layouts/site.blade.php
+@@ -1,8 +1,11 @@
++@use('App\Services\SitePalette')
++
+ @props([
+     'title',
+     'description' => null,
+     'image' => null,
+     'monogram' => 'J',
++    'palette' => new SitePalette,
+     'indexable' => true,
+ ])
+ 
+@@ -11,7 +14,7 @@
+     <head>
+         <meta charset="utf-8">
+         <meta name="viewport" content="width=device-width, initial-scale=1">
+-        <meta name="theme-color" content="#1e2a44">
++        <meta name="theme-color" content="{{ $palette->primaryColor }}">
+ 
+         <title>{{ $title }}</title>
+ 
+@@ -36,11 +39,21 @@
+         @endif
+         <meta name="twitter:card" content="summary_large_image">
+ 
+-        <link rel="icon" href="data:image/svg+xml,{{ rawurlencode('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#1e2a44"/><text x="32" y="44" font-family="Georgia,serif" font-size="34" text-anchor="middle" fill="#c4a46e">'.e($monogram).'</text></svg>') }}">
++        <link rel="icon" href="data:image/svg+xml,{{ rawurlencode('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="'.$palette->primaryColor.'"/><text x="32" y="44" font-family="Georgia,serif" font-size="34" text-anchor="middle" fill="#c4a46e">'.e($monogram).'</text></svg>') }}">
+ 
+         @fonts
+ 
+         @vite(['resources/css/app.css', 'resources/js/app.js'])
++
++        @if ($palette->isCustomized())
++            <style>
++                :root {
++                    @foreach ($palette->cssVariables() as $property => $value)
++                        {{ $property }}: {{ $value }};
++                    @endforeach
++                }
++            </style>
++        @endif
+     </head>
+     <body {{ $attributes->merge(['class' => 'min-h-screen']) }}>
+         {{ $slot }}
+diff --git a/resources/views/home.blade.php b/resources/views/home.blade.php
+index 242591f..c98292b 100644
+--- a/resources/views/home.blade.php
++++ b/resources/views/home.blade.php
+@@ -15,6 +15,7 @@
+     :description="$settings->seo_description"
+     :image="$settings->photoUrl()"
+     :monogram="$settings->monogram()"
++    :palette="$settings->palette()"
+ >
+     @include('home.header')
+ 
+diff --git a/resources/views/home/hero.blade.php b/resources/views/home/hero.blade.php
+index c03425c..bb23a91 100644
+--- a/resources/views/home/hero.blade.php
++++ b/resources/views/home/hero.blade.php
+@@ -21,7 +21,7 @@
+             @endif
+ 
+             <div class="mt-10 flex flex-wrap items-center gap-x-6 gap-y-3">
+-                <a href="#agenda" class="inline-flex items-center gap-3 rounded-full bg-ink px-7 py-4 text-base font-medium text-paper shadow-[0_14px_30px_-14px_rgb(30_42_68/0.8)] transition hover:bg-ink-deep">
++                <a href="#agenda" class="inline-flex items-center gap-3 rounded-full bg-ink px-7 py-4 text-base font-medium text-paper shadow-[0_14px_30px_-14px] shadow-ink/80 transition hover:bg-ink-deep">
+                     Agendar aula experimental
+                     <span aria-hidden="true">→</span>
+                 </a>
+@@ -42,11 +42,11 @@
+                     <img
+                         src="{{ $settings->photoUrl() }}"
+                         alt="Foto de {{ $settings->teacher_name }}"
+-                        class="relative aspect-[4/5] w-full object-cover shadow-[0_30px_60px_-30px_rgb(20_29_49/0.6)]"
++                        class="relative aspect-[4/5] w-full object-cover shadow-[0_30px_60px_-30px] shadow-ink-deep/60"
+                         fetchpriority="high"
+                     >
+                 @else
+-                    <div class="relative grid aspect-[4/5] w-full place-items-center overflow-hidden bg-ink shadow-[0_30px_60px_-30px_rgb(20_29_49/0.6)]">
++                    <div class="relative grid aspect-[4/5] w-full place-items-center overflow-hidden bg-ink shadow-[0_30px_60px_-30px] shadow-ink-deep/60">
+                         <span aria-hidden="true" class="font-serif text-[10rem] leading-none text-brass-light/90 italic">{{ $settings->monogram() }}</span>
+                         <span aria-hidden="true" class="absolute inset-6 border border-paper/10"></span>
+                     </div>
+diff --git a/resources/views/testimonials/create.blade.php b/resources/views/testimonials/create.blade.php
+index 527ac98..b348588 100644
+--- a/resources/views/testimonials/create.blade.php
++++ b/resources/views/testimonials/create.blade.php
+@@ -1,6 +1,7 @@
+ <x-layouts.site
+     :title="'Deixe seu depoimento — '.$settings->teacher_name"
+     :monogram="$settings->monogram()"
++    :palette="$settings->palette()"
+     :indexable="false"
+ >
+     <header class="border-b border-line/70">
+diff --git a/tests/Feature/Filament/Pages/ManageSiteContentTest.php b/tests/Feature/Filament/Pages/ManageSiteContentTest.php
+index 8655596..8a73f7e 100644
+--- a/tests/Feature/Filament/Pages/ManageSiteContentTest.php
++++ b/tests/Feature/Filament/Pages/ManageSiteContentTest.php
+@@ -5,8 +5,10 @@
+ use App\Filament\Pages\ManageSiteContent;
+ use App\Models\SiteSetting;
+ use App\Models\User;
++use Filament\Actions\Testing\TestAction;
+ use Illuminate\Foundation\Testing\LazilyRefreshDatabase;
+ use Livewire\Livewire;
++use PHPUnit\Framework\Attributes\DataProvider;
+ use Tests\TestCase;
+ 
+ class ManageSiteContentTest extends TestCase
+@@ -67,4 +69,55 @@ public function test_rejects_an_incomplete_whatsapp_number_and_a_too_short_inter
+         $component->assertHasFormErrors(['whatsapp_number', 'slot_interval_minutes'], 'form');
+         $this->assertDatabaseHas('site_settings', ['whatsapp_number' => '5511987654321', 'slot_interval_minutes' => 30]);
+     }
++
++    public function test_saves_the_primary_color_of_the_site(): void
++    {
++        $this->actingAs(User::factory()->create());
++        SiteSetting::factory()->create(['primary_color' => null]);
++
++        $component = Livewire::test(ManageSiteContent::class)
++            ->fillForm(['primary_color' => '#14532D'], 'form')
++            ->call('save');
++
++        $component->assertHasNoFormErrors(form: 'form');
++        $this->assertDatabaseHas('site_settings', ['primary_color' => '#14532d']);
++    }
++
++    /**
++     * @return array<string, array{0: string, 1: string}>
++     */
++    public static function unusablePrimaryColors(): array
++    {
++        return [
++            'too light for the light texts' => ['#22c55e', 'Essa cor é clara demais e deixaria os textos claros do site difíceis de ler. Escolha um tom mais escuro.'],
++            'not hexadecimal' => ['verde', 'Informe a cor no formato #RRGGBB, por exemplo #1e2a44.'],
++        ];
++    }
++
++    #[DataProvider('unusablePrimaryColors')]
++    public function test_rejects_an_unusable_primary_color(string $color, string $expectedMessage): void
++    {
++        $this->actingAs(User::factory()->create());
++        SiteSetting::factory()->create(['primary_color' => '#14532d']);
++
++        $component = Livewire::test(ManageSiteContent::class)
++            ->fillForm(['primary_color' => $color], 'form')
++            ->call('save');
++
++        $component->assertHasFormErrors(['primary_color' => $expectedMessage], 'form');
++        $this->assertDatabaseHas('site_settings', ['primary_color' => '#14532d']);
++    }
++
++    public function test_restoring_the_original_color_clears_the_primary_color(): void
++    {
++        $this->actingAs(User::factory()->create());
++        SiteSetting::factory()->create(['primary_color' => '#14532d']);
++
++        $component = Livewire::test(ManageSiteContent::class)
++            ->callAction(TestAction::make('restoreDefaultPrimaryColor')->schemaComponent('primary_color', schema: 'form'))
++            ->call('save');
++
++        $component->assertHasNoFormErrors(form: 'form');
++        $this->assertDatabaseHas('site_settings', ['primary_color' => null]);
++    }
+ }
+diff --git a/tests/Feature/Http/Controllers/HomeControllerTest.php b/tests/Feature/Http/Controllers/HomeControllerTest.php
+index 6d152de..1f75c2c 100644
+--- a/tests/Feature/Http/Controllers/HomeControllerTest.php
++++ b/tests/Feature/Http/Controllers/HomeControllerTest.php
+@@ -45,6 +45,28 @@ public function test_renders_default_content_before_the_database_is_seeded(): vo
+         $this->assertDatabaseCount('site_settings', 1);
+     }
+ 
++    public function test_renders_the_site_in_the_primary_color_chosen_by_the_teacher(): void
++    {
++        SiteSetting::factory()->create(['primary_color' => '#14532d']);
++
++        $response = $this->get(route('home'));
++
++        $response
++            ->assertSee('--color-ink: #14532d;', escape: false)
++            ->assertSee('<meta name="theme-color" content="#14532d">', escape: false);
++    }
++
++    public function test_keeps_the_original_colors_when_no_primary_color_is_chosen(): void
++    {
++        SiteSetting::factory()->create(['primary_color' => null]);
++
++        $response = $this->get(route('home'));
++
++        $response
++            ->assertDontSee('--color-ink', escape: false)
++            ->assertSee('<meta name="theme-color" content="#1e2a44">', escape: false);
++    }
++
+     public function test_shows_only_active_methodology_steps_in_their_display_order(): void
+     {
+         SiteSetting::factory()->create();
+diff --git a/tests/Feature/Http/Controllers/TestimonialControllerTest.php b/tests/Feature/Http/Controllers/TestimonialControllerTest.php
+new file mode 100644
+index 0000000..1a8abd2
+--- /dev/null
++++ b/tests/Feature/Http/Controllers/TestimonialControllerTest.php
+@@ -0,0 +1,28 @@
++<?php
++
++namespace Tests\Feature\Http\Controllers;
++
++use App\Models\SiteSetting;
++use Illuminate\Foundation\Testing\LazilyRefreshDatabase;
++use Tests\TestCase;
++
++class TestimonialControllerTest extends TestCase
++{
++    use LazilyRefreshDatabase;
++
++    protected function setUp(): void
++    {
++        parent::setUp();
++
++        $this->withoutVite();
++    }
++
++    public function test_renders_the_page_in_the_primary_color_chosen_by_the_teacher(): void
++    {
++        SiteSetting::factory()->create(['primary_color' => '#7f1d1d']);
++
++        $response = $this->get(route('testimonials.create'));
++
++        $response->assertSee('--color-ink: #7f1d1d;', escape: false);
++    }
++}
+diff --git a/tests/Unit/Services/SitePaletteTest.php b/tests/Unit/Services/SitePaletteTest.php
+new file mode 100644
+index 0000000..0b0a1a1
+--- /dev/null
++++ b/tests/Unit/Services/SitePaletteTest.php
+@@ -0,0 +1,89 @@
++<?php
++
++namespace Tests\Unit\Services;
++
++use App\Services\SitePalette;
++use PHPUnit\Framework\Attributes\DataProvider;
++use PHPUnit\Framework\TestCase;
++
++class SitePaletteTest extends TestCase
++{
++    /**
++     * @return array<string, array{0: string|null}>
++     */
++    public static function invalidColors(): array
++    {
++        return [
++            'nothing chosen' => [null],
++            'empty' => [''],
++            'color name' => ['navy'],
++            'missing a digit' => ['#1e2a4'],
++            'with transparency' => ['#1e2a44cc'],
++            'css injection' => ['#1e2a44; } body { display: none'],
++        ];
++    }
++
++    #[DataProvider('invalidColors')]
++    public function test_falls_back_to_the_original_navy_without_a_valid_color(?string $color): void
++    {
++        $palette = new SitePalette($color);
++
++        $this->assertSame('#1e2a44', $palette->primaryColor);
++        $this->assertFalse($palette->isCustomized());
++    }
++
++    public function test_normalizes_the_chosen_color_to_lowercase(): void
++    {
++        $palette = new SitePalette(' #14532D ');
++
++        $this->assertSame('#14532d', $palette->primaryColor);
++        $this->assertTrue($palette->isCustomized());
++    }
++
++    public function test_reproduces_the_shades_the_site_was_designed_with_from_the_original_navy(): void
++    {
++        $palette = new SitePalette('#1e2a44');
++
++        $this->assertSame([
++            '--color-ink' => '#1e2a44',
++            '--color-ink-deep' => '#141d31',
++            '--color-ink-soft' => '#4a5468',
++        ], $palette->cssVariables());
++    }
++
++    public function test_derives_a_darker_shade_and_a_muted_tone_of_the_chosen_hue(): void
++    {
++        $palette = new SitePalette('#14532d');
++
++        $this->assertSame([
++            '--color-ink' => '#14532d',
++            '--color-ink-deep' => '#0c3d1f',
++            '--color-ink-soft' => '#435b49',
++        ], $palette->cssVariables());
++    }
++
++    /**
++     * @return array<string, array{0: string, 1: bool}>
++     */
++    public static function colorsAndLegibility(): array
++    {
++        return [
++            'original navy' => ['#1e2a44', true],
++            'black' => ['#000000', true],
++            'dark green' => ['#14532d', true],
++            'brown, just above the minimum' => ['#713f12', true],
++            'burnt orange, just below the minimum' => ['#9a3412', false],
++            'royal blue' => ['#1d4ed8', false],
++            'bright green' => ['#22c55e', false],
++            'white' => ['#ffffff', false],
++        ];
++    }
++
++    #[DataProvider('colorsAndLegibility')]
++    public function test_accepts_only_colors_dark_enough_to_keep_the_texts_legible(string $color, bool $isLegible): void
++    {
++        $palette = new SitePalette($color);
++
++        $this->assertSame($isLegible, $palette->hasLegibleContrast());
++    }
++}
+-- 
+2.43.0
+
